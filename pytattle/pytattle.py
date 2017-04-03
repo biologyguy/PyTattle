@@ -78,21 +78,21 @@ def ask(input_prompt, default="yes", timeout=0):
         return False
 
 
-class CrashReporter(object):
+class PyTattle(object):
     """Catch all errors and prepare/send them somewhere"""
-    def __init__(self, redirect="email", traceback="full", sysinfo="full", **kwargs):
+    def __init__(self, redirect="email", traceback_type="cleaned", sysinfo="full", prev_error_url=None, **kwargs):
         """
 
         :param redirect: ["email", "ftp", "github"]
-        :param traceback: ["full", "cleaned"]
+        :param traceback_type: ["full", "cleaned"]
         :param sysinfo: ["full", "none"]
         :param kwargs: email, ftploc, githubloc
         """
         assert redirect in ["email", "ftp", "github"]
         self.redirect = redirect
 
-        assert traceback in ["full", "cleaned"]
-        self.traceback = traceback
+        assert traceback_type in ["full", "cleaned"]
+        self.traceback_type = traceback_type
 
         assert sysinfo in ["full", "none"]
         self.sysinfo = sysinfo
@@ -101,6 +101,7 @@ class CrashReporter(object):
         self.ftploc = None if "ftploc" not in kwargs else kwargs["ftploc"]
         self.githubloc = None if "githubloc" not in kwargs else kwargs["githubloc"]
 
+        self.prev_error_url = prev_error_url
         return
 
     def tattle(self, main, *args, **kwargs):
@@ -110,44 +111,13 @@ class CrashReporter(object):
             main(*args, **kwargs)
         except:
             err = sys.exc_info()
-            self.error_report(err)
+            self._error_report(err)
             sys.exit()
 
-    def __exit__(self):
-        pass
-
-    def error_report(self, trace_back, permission=False):
-        print("Made it here for now!")
-        print(trace_back)
-        return
+    def _error_report(self, trace_back, permission=False):
         message = ""
-        error_hash = re.sub("^#.*?\n{2}", "", trace_back, flags=re.DOTALL)  # Remove error header information before hashing
-        error_hash = md5(error_hash.encode("utf-8")).hexdigest()  # Hash the error
-        try:  # Check online to see if error has been reported before
-            raw_error_data = request.urlopen("https://raw.githubusercontent.com/biologyguy/BuddySuite/error_codes/"
-                                             "diagnostics/error_codes", timeout=2)
-            error_string = raw_error_data.read().decode("utf-8")  # Read downloaded file
-            error_string = re.sub("#.*\n", "", error_string)
-            error_json = json.loads(error_string)  # Convert JSON into a data table
-
-            version_str = re.search("# [A-Z]?[a-z]+Buddy: (.*)", trace_back).group(1)
-
-            if error_hash in error_json.keys():  # Check if error is known (if it's in the data table)
-                if error_json[error_hash][1] == "None" or error_json[error_hash][1] == version_str:  # If error not resolved
-                    message += "This is a known bug since version %s, " \
-                               "but it has not been resolved yet.\n" % error_json[error_hash][0]
-
-                else:  # If error has been resolved
-                    print("This bug was resolved in version %s. We recommend you upgrade to the latest version (if you "
-                          "downloaded BuddySuite using pip, use the command pip install "
-                          "buddysuite --upgrade).\n" % error_json[error_hash][1])
-                    return
-
-            else:  # If error is unknown
-                message += "Uh oh, you've found a new bug! This issue is not currently in our bug tracker.\n"
-
-        except (URLError, HTTPError, ContentTooShortError) as err:  # If there is an error, just blow through
-            message += "Failed to locate known error codes:\n%s\n" % str(err)
+        if self.prev_error_url:
+            message += self._check_previous_errors()
 
         if permission:
             message += "An error report with the above traceback is being sent to the BuddySuite developers because " \
@@ -171,8 +141,37 @@ class CrashReporter(object):
                 print("Well... We tried. Seems there was a problem with the FTP upload\n%s" % e)
         return
 
-    def send_traceback(self, tool, function, e, version):
+    def _check_previous_errors(self):
+        message = ""
+        error_hash = re.sub("^#.*?\n{2}", "", trace_back, flags=re.DOTALL)  # Remove error header information before hashing
+        error_hash = md5(error_hash.encode("utf-8")).hexdigest()  # Hash the error
+        try:  # Check online to see if error has been reported before
+            raw_error_data = request.urlopen(self.prev_error_url, timeout=2)
+            error_string = raw_error_data.read().decode("utf-8")  # Read downloaded file
+            error_string = re.sub("#.*\n", "", error_string)
+            error_json = json.loads(error_string)  # Convert JSON into a data table
+
+            version_str = re.search("# [A-Z]?[a-z]+Buddy: (.*)", trace_back).group(1)
+
+            if error_hash in error_json.keys():  # Check if error is known (if it's in the data table)
+                if error_json[error_hash][1] == "None" or error_json[error_hash][1] == version_str:  # If error not resolved
+                    message += "This is a known bug since version %s, " \
+                               "but it has not been resolved yet.\n" % error_json[error_hash][0]
+
+                else:  # If error has been resolved
+                    message += "This bug was resolved in version %s. " \
+                               "We recommend you upgrade to the latest version.\n" % error_json[error_hash][1]
+
+            else:  # If error is unknown
+                message += "Uh oh, you've found a new bug! This issue is not currently in our bug tracker.\n"
+
+        except (URLError, HTTPError, ContentTooShortError) as err:  # If there is an error, just blow through
+            message += "Failed to locate known error codes:\n%s\n" % str(err)
+        return message
+
+    def _send_ftp_traceback(self, tool, func, e, version):
         now = datetime.datetime.now()
+
         def config_values():
             return True
         config = config_values()
@@ -184,7 +183,7 @@ class CrashReporter(object):
                 _line = re.sub('"{0}.*{0}(.*)?"'.format(os.sep), r'"\1"', _line)
             tb += _line
         bs_version = "# %s: %s\n" % (tool, version.short())
-        func = "# Function: %s\n" % function
+        func = "# Function: %s\n" % func
         platform = "# Platform: %s\n" % sys.platform
         python = "# Python: %s\n" % re.sub("[\n\r]", "", sys.version)
         user = "# User: %s\n" % config['user_hash']
@@ -192,17 +191,17 @@ class CrashReporter(object):
         error = "%s: %s\n\n" % (type(e).__name__, e)
 
         tb = "".join([bs_version, func, python, platform, user, date, error, tb])
-        print("\033[m%s::%s has crashed with the following traceback:\033[91m\n\n%s\n\n\033[m" % (tool, function, tb))
-        self.error_report(tb, config["diagnostics"])
+        print("\033[m%s::%s has crashed with the following traceback:\033[91m\n\n%s\n\n\033[m" % (tool, func, tb))
+        self._error_report(tb, config["diagnostics"])
         return
 
 
-def main(arg1, arg2, doing="something not that important!"):
-    print("Doing %s" % (doing))
+def main_function(arg1, arg2, doing="something not that important!"):
+    print("%s %s Doing %s" % (arg1, arg2, doing))
     # Crash!
-    1/0
-    return
+    x = 1/0
+    return x
 
 if __name__ == '__main__':
-    reporter = CrashReporter(email="biologyguy@gmail.com")
-    reporter.tattle(main, 1, 2, doing="Blahh")
+    reporter = PyTattle(redirect="ftp", email="biologyguy@gmail.com")
+    reporter.tattle(main_function, 1, 2, doing="Blahh")
