@@ -10,12 +10,72 @@ import sys
 import os
 import re
 import shutil
+import signal
+from time import time
+import datetime
+from ftplib import FTP, all_errors
+from hashlib import md5
+from urllib import request
+from urllib.error import URLError, HTTPError, ContentTooShortError
+import json
+import traceback
+from tempfile import TemporaryFile
 
 
-class Exception(Exception):
-    def __init__(self, crashreporter):
-        super(Exception, self).__init__(crashreporter=crashreporter)
-        # Do some more stuff to handle crashes
+def ask(input_prompt, default="yes", timeout=0):
+    if default == "yes":
+        yes_list = ["yes", "y", '']
+        no_list = ["no", "n", "abort"]
+    else:
+        yes_list = ["yes", "y"]
+        no_list = ["no", "n", "abort", '']
+
+    def kill(*args):
+        raise TimeoutError(args)
+
+    try:
+        if os.name == "nt":
+            import msvcrt
+            timeout = timeout if timeout > 0 else 3600
+            start_time = time()
+            sys.stdout.write(input_prompt)
+            sys.stdout.flush()
+            _response = ''
+            while True:
+                if msvcrt.kbhit():
+                    _chr = msvcrt.getche()
+                    if ord(_chr) == 13:  # enter_key
+                        break
+                    elif ord(_chr) >= 32:  # space_char
+                        _response += _chr.decode()
+                if len(_response) == 0 and (time() - start_time) > timeout:
+                    _response = default
+                    break
+
+            print('')  # needed to move to next line
+            if _response.lower() in yes_list:
+                return True
+            else:
+                return False
+
+        else:
+            signal.signal(signal.SIGALRM, kill)
+            signal.alarm(timeout)
+            _response = input(input_prompt)
+            signal.alarm(0)
+            while True:
+                if _response.lower() in yes_list:
+                    return True
+                elif _response.lower() in no_list:
+                    return False
+                else:
+                    print("Response not understood. Valid options are 'yes' and 'no'.")
+                    signal.alarm(timeout)
+                    _response = input(input_prompt)
+                    signal.alarm(0)
+
+    except TimeoutError:
+        return False
 
 
 class CrashReporter(object):
@@ -43,7 +103,23 @@ class CrashReporter(object):
 
         return
 
+    def tattle(self, main, *args, **kwargs):
+        try:
+            print(args)
+            print(kwargs)
+            main(*args, **kwargs)
+        except:
+            err = sys.exc_info()
+            self.error_report(err)
+            sys.exit()
+
+    def __exit__(self):
+        pass
+
     def error_report(self, trace_back, permission=False):
+        print("Made it here for now!")
+        print(trace_back)
+        return
         message = ""
         error_hash = re.sub("^#.*?\n{2}", "", trace_back, flags=re.DOTALL)  # Remove error header information before hashing
         error_hash = md5(error_hash.encode("utf-8")).hexdigest()  # Hash the error
@@ -84,12 +160,12 @@ class CrashReporter(object):
         try:
             if permission:
                 print("\nPreparing error report for FTP upload...")
-                temp_file = TempFile()
+                temp_file = TemporaryFile()
                 temp_file.write(trace_back)
                 print("Connecting to FTP server...")
                 ftp = FTP("rf-cloning.org", user="buddysuite", passwd="seqbuddy", timeout=5)
                 print("Sending...")
-                ftp.storlines("STOR error_%s" % temp_file.name, open(temp_file.path, "rb"))  # Upload error to FTP
+                ftp.storlines("STOR error_%s" % temp_file.name, temp_file)  # Upload error to FTP
                 print("Success! Thank you.")
         except all_errors as e:
                 print("Well... We tried. Seems there was a problem with the FTP upload\n%s" % e)
@@ -97,6 +173,8 @@ class CrashReporter(object):
 
     def send_traceback(self, tool, function, e, version):
         now = datetime.datetime.now()
+        def config_values():
+            return True
         config = config_values()
         tb = ""
         for _line in traceback.format_tb(sys.exc_info()[2]):
@@ -115,9 +193,16 @@ class CrashReporter(object):
 
         tb = "".join([bs_version, func, python, platform, user, date, error, tb])
         print("\033[m%s::%s has crashed with the following traceback:\033[91m\n\n%s\n\n\033[m" % (tool, function, tb))
-        error_report(tb, config["diagnostics"])
+        self.error_report(tb, config["diagnostics"])
         return
 
 
+def main(arg1, arg2, doing="something not that important!"):
+    print("Doing %s" % (doing))
+    # Crash!
+    1/0
+    return
+
 if __name__ == '__main__':
     reporter = CrashReporter(email="biologyguy@gmail.com")
+    reporter.tattle(main, 1, 2, doing="Blahh")
