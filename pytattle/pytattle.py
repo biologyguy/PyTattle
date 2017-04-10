@@ -86,7 +86,7 @@ class PyTattle(object):
         :param redirect: ["email", "ftp", "github"]
         :param traceback_type: ["full", "cleaned"]
         :param sysinfo: ["full", "none"]
-        :param kwargs: email, ftploc, githubloc
+        :param kwargs: email, ftploc, ftplogin, ftppswd, githubloc
         """
         assert redirect in ["email", "ftp", "github"]
         self.redirect = redirect
@@ -98,7 +98,11 @@ class PyTattle(object):
         self.sysinfo = sysinfo
 
         self.email = None if "email" not in kwargs else kwargs["email"]
+
         self.ftploc = None if "ftploc" not in kwargs else kwargs["ftploc"]
+        self.ftplogin = None if "ftplogin" not in kwargs else kwargs["ftplogin"]
+        self.ftppswd = None if "ftppswd" not in kwargs else kwargs["ftppswd"]
+
         self.githubloc = None if "githubloc" not in kwargs else kwargs["githubloc"]
 
         self.prev_error_url = prev_error_url
@@ -111,29 +115,25 @@ class PyTattle(object):
             main(*args, **kwargs)
         except:
             err = sys.exc_info()
-            self._error_report(err)
+            if self.redirect == "ftp":
+                self._send_ftp_traceback(err)
             sys.exit()
 
-    def _error_report(self, trace_back, permission=False):
+    def _error_report(self, trace_back):
         message = ""
         if self.prev_error_url:
             message += self._check_previous_errors()
 
-        if permission:
-            message += "An error report with the above traceback is being sent to the BuddySuite developers because " \
-                       "you have elected to participate in the Software Improvement Program. You may opt-out of this " \
-                       "program at any time by re-running the BuddySuite installer.\n"
-            print(message)
-        else:
-            permission = ask("%s\nAn error report with the above traceback has been prepared and is ready to send to the "
-                             "BuddySuite developers.\nWould you like to upload the report? [y]/n " % message, timeout=15)
+        permission = ask("%s\nAn error report with the above traceback has been prepared and is ready to send to the "
+                         "package developers.\nWould you like to upload the report? [y]/n " % message, timeout=15)
         try:
             if permission:
                 print("\nPreparing error report for FTP upload...")
                 temp_file = TemporaryFile()
-                temp_file.write(trace_back)
-                print("Connecting to FTP server...")
-                ftp = FTP("rf-cloning.org", user="buddysuite", passwd="seqbuddy", timeout=5)
+                temp_file.write(trace_back.encode())
+                print("Connecting to FTP server...", self.ftploc, self.ftplogin, self.ftppswd)
+                ftp = FTP(self.ftploc, user=self.ftplogin, passwd=self.ftppswd, timeout=5)
+                # ftp = FTP("rf-cloning.org", user="buddysuite", passwd="seqbuddy", timeout=5)
                 print("Sending...")
                 ftp.storlines("STOR error_%s" % temp_file.name, temp_file)  # Upload error to FTP
                 print("Success! Thank you.")
@@ -163,18 +163,14 @@ class PyTattle(object):
                                "We recommend you upgrade to the latest version.\n" % error_json[error_hash][1]
 
             else:  # If error is unknown
-                message += "Uh oh, you've found a new bug! This issue is not currently in our bug tracker.\n"
+                message += "Uh oh, you've found a new bug! This issue is not currently in bug tracker.\n"
 
         except (URLError, HTTPError, ContentTooShortError) as err:  # If there is an error, just blow through
             message += "Failed to locate known error codes:\n%s\n" % str(err)
         return message
 
-    def _send_ftp_traceback(self, tool, func, e, version):
+    def _send_ftp_traceback(self, e):
         now = datetime.datetime.now()
-
-        def config_values():
-            return True
-        config = config_values()
         tb = ""
         for _line in traceback.format_tb(sys.exc_info()[2]):
             if os.name == "nt":
@@ -182,17 +178,14 @@ class PyTattle(object):
             else:
                 _line = re.sub('"{0}.*{0}(.*)?"'.format(os.sep), r'"\1"', _line)
             tb += _line
-        bs_version = "# %s: %s\n" % (tool, version.short())
-        func = "# Function: %s\n" % func
         platform = "# Platform: %s\n" % sys.platform
         python = "# Python: %s\n" % re.sub("[\n\r]", "", sys.version)
-        user = "# User: %s\n" % config['user_hash']
         date = "# Date: %s\n\n" % now.strftime('%Y-%m-%d')
         error = "%s: %s\n\n" % (type(e).__name__, e)
 
-        tb = "".join([bs_version, func, python, platform, user, date, error, tb])
-        print("\033[m%s::%s has crashed with the following traceback:\033[91m\n\n%s\n\n\033[m" % (tool, func, tb))
-        self._error_report(tb, config["diagnostics"])
+        tb = "".join([python, platform, date, error, tb])
+        print("\033[mYour program has crashed with the following traceback:\033[91m\n\n%s\n\n\033[m" % tb)
+        self._error_report(tb)
         return
 
 
@@ -203,5 +196,5 @@ def main_function(arg1, arg2, doing="something not that important!"):
     return x
 
 if __name__ == '__main__':
-    reporter = PyTattle(redirect="ftp", email="biologyguy@gmail.com")
+    reporter = PyTattle(redirect="ftp", ftploc="rf-cloning.org", ftplogin="buddysuite", ftppswd="seqbuddy")
     reporter.tattle(main_function, 1, 2, doing="Blahh")
