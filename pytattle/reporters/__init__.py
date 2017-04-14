@@ -33,15 +33,16 @@ class Reporter(object):
             user.add_section(self.name)
         for option in self.required:
             if not user.has_option(self.name, option):
+                obsecure, opt_type = self.required[option]
                 if option in self.config:
                     value = self.config[option]
                 else:
                     value = self.ask_for(option)
                 # type conversion
-                value = self.required[option](value)
+                value = opt_type(value)
                 user.set(self.name, option, value)
     
-    def ask_for(self, option):
+    def ask_for(self, option, obsecure=False):
         """Ask the user to enter a configuration value.
 
         Args:
