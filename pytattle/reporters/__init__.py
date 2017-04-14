@@ -1,6 +1,3 @@
-
-from pytattle.reporters import User, Error
-
 class Reporter(object):
     """Base class for crash reporters.
     """
@@ -49,37 +46,3 @@ class Reporter(object):
             the reporting method).
         """
         raise NotImplementedError()
-
-class Report(object):
-    """Encapsulates an error report.
-    """
-    def __init__(self, user, error):
-        self.user = user
-        self.error = error
-        self.results = {}
-    
-    def send(self, reporters):
-        """Send the error via one or more reporters.
-        """
-        sent = 0
-        for reporter in reporters:
-            if not reporter.check_previous(self.error, user=self.user):
-                result = reporter.report(self.error, user=self.user)
-                self.results[reporter.name] = result
-        return sent
-    
-    def as_dict(self, paranoid=False):
-        """Convert this report to a simple dict for serialization.
-
-        Args:
-            paranoid: Whether to exclude any personally identifiable 
-                information. Note: sensitive information such as
-                passwords will NEVER be included.
-        
-        Returns:
-            A dict with three keys: user, error, and results.
-        """
-        return dict(
-            user=self.user.as_dict(paranoid),
-            error=self.error.as_dict(paranoid),
-            results=self.results)
