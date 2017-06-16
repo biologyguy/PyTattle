@@ -1,3 +1,5 @@
+from getpass import getpass
+
 class Reporter(object):
     """Base class for crash reporters.
 
@@ -27,7 +29,7 @@ class Reporter(object):
         """Obtain any necessary configuration parameters from the user.
 
         Args:
-            user: The user to configure.
+            user: A User object; the user to configure.
         """
         if not user.has_section(self.name):
             user.add_section(self.name)
@@ -42,19 +44,19 @@ class Reporter(object):
                 value = opt_type(value)
                 user.set(self.name, option, value)
     
-    def ask_for(self, option, obsecure=False):
+    def ask_for(self, option, prompt=None, obsecure=False):
         """Ask the user to enter a configuration value.
 
         Args:
             option: The option name.
             obscure: Whether to obscure the input (e.g. for passwords).
         """
-        #ask(
-        #    "Please enter a value for reporting method {} option {}".format(
-        #        self.name, option), 
-        #    obscure=obscure)
-        pass
-
+        if prompt is None:
+            prompt = (
+                "Please enter a value for reporting method {method} "
+                "option {option}: ")
+        return ask(prompt, obscure=obscure, method=self.name, option=option)
+    
     def check_previous(self, error, user=None):
         """Check whether an error has been reported previously.
 
@@ -80,3 +82,22 @@ class Reporter(object):
             the reporting method).
         """
         raise NotImplementedError()
+
+def ask(prompt, obscure=False, **kwargs):
+    """Ask user for some information via the command line.
+    
+    Args:
+        prompt: The prompt to show. This string can have placeholders.
+        obscure: Whether to obscure the input (as with a password).
+        kwargs: Keyword args to use when formatting the prompt string.
+    
+    Returns:
+        The input value.
+    """
+    prompt = message.format(**kwargs)
+    if obscure:
+        return getpass(prompt)
+    elif sys.version_info >= (3, 0):
+        return input(prompt)
+    else:
+        return raw_input(prompt)

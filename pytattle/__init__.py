@@ -1,7 +1,9 @@
 """
 """
 import base64
+from collections import defaultdict
 from configparser import ConfigParser
+import hashlib
 import io
 import logging
 import os
@@ -10,51 +12,6 @@ class TattleError(Exception):
     """Base exception class for PyTattle.
     """
     pass
-
-class Config(ConfigParser):
-    """Subclass of ConfigParser that adds read_encrypted and write_encrypted
-    methods.
-    """
-    def __init__(self, config_file, passphrase=None, salt=None):
-        # Not great to store this in memory, but otherwise we have to
-        # constantly ask the user for it.
-        super().__init__()
-        self.config_file = config_file
-        self.passphrase = passphrase
-        if passphrase:
-            self.crypter = Crypter(salt)
-        if os.path.exists(config_file):
-            self.read()
-    
-    def read(self):
-        """Load config from an encrypted file.
-
-        Args:
-            path: Path to the config file.
-            passphrase: The passphrase for encryption.
-        """
-        if self.passphrase:
-            with open(self.config_file, 'rb') as inp:
-                decrypted = self.crypter.decrypt(inp.read(), self.passphrase)
-                self.read_string(decrypted)
-        else:
-            super().read(self.config_file)
-    
-    def write(self):
-        """Encrypt the config and write to a file.
-
-        Args:
-            path: Path to the config file.
-            passphrase: The passphrase for encryption.
-        """
-        if self.passphrase:
-            string = io.StringIO()
-            super().write(string)
-            encrypted = self.crypter.decrypt(string.getvalue(), self.passphrase)
-            with open(self.config_file, 'wb') as out:
-                out.write(encrypted)
-        else:
-            super().write(self.config_file)
 
 class Crypter(object):
     """Wrapper around cryptography that imports necessarily libraries
@@ -133,11 +90,52 @@ class Crypter(object):
         key = base64.urlsafe_b64encode(kdf.derive(passphrase.encode()))
         return self._cryptography_modules[3](key)
 
-class User(Config):
-    """Information about the user, including any necessary credentials.
+class Serializable(object):
+    def as_dict(self, paranoid=False):
+        """Convert this object to a simple dict for serialization.
+        
+        Args:
+            paranoid: Whether to exclude any personally identifiable 
+                information. Note: sensitive information such as
+                passwords will NEVER be included.
+        """
+        raise NotImplementedError()
+
+class Config(ConfigParser, Serializable):
+    """Subclass of ConfigParser that adds read_encrypted and write_encrypted
+    methods.
+    
+    Args:
+        config_file:
+        passphrase:
+        salt:
+        kwargs: key=value pairs to use for initializing the global section of
+            the config.
     """
-    def __init__(self, config_file='.tattle', passphrase=None, salt=None):
-        super().__init__(config_file, passphrase, salt)
+    def __init__(self, config_file=None, passphrase=None, salt=None, **kwargs):
+        super().__init__()
+        self.config_file = config_file or self.default_config_file
+        # Not great to store this in memory, but otherwise we have to
+        # constantly ask the user for it.
+        self.passphrase = passphrase
+        if passphrase:
+            self.crypter = Crypter(salt)
+        if os.path.exists(config_file):
+            self.read()
+        for key, value in kwargs.items():
+            self['DEFAULT'][key] = value
+        self._cache = defaultdict(dict)
+    
+    def get_cache(self, section_name):
+        """Get a cache for a section. Cached values are not persisted.
+        
+        Args:
+            section_name: 
+        
+        Returns:
+            A dict.
+        """
+        return self._cache[name]
     
     def set_section(self, section_name, options):
         """Add a section to the config file. If the section already exists,
@@ -148,41 +146,48 @@ class User(Config):
         for option, value in options.items():
             self.set(section_name, option, value)
     
-    def as_dict(self, paranoid=False):
-        """Convert this user to a simple dict for serialization.
-
+    def read(self):
+        """Load config from an encrypted file.
+        
         Args:
-            paranoid: Whether to exclude any personally identifiable 
-                information. Note: sensitive information such as
-                passwords will NEVER be included.
+            path: Path to the config file.
+            passphrase: The passphrase for encryption.
         """
-        pass
+        if self.passphrase:
+            with open(self.config_file, 'rb') as inp:
+                decrypted = self.crypter.decrypt(inp.read(), self.passphrase)
+                self.read_string(decrypted)
+        else:
+            super().read(self.config_file)
+    
+    def write(self):
+        """Encrypt the config and write to a file.
+        
+        Args:
+            path: Path to the config file.
+            passphrase: The passphrase for encryption.
+        """
+        if self.passphrase:
+            string = io.StringIO()
+            super().write(string)
+            encrypted = self.crypter.decrypt(string.getvalue(), self.passphrase)
+            with open(self.config_file, 'wb') as out:
+                out.write(encrypted)
+        else:
+            super().write(self.config_file)
 
-class ErrorFactory(object):
-    """Stores application metadata that should be sent with every error, and
-    creates new :class:`Error` instances from exceptions.
+class App(Config):
+    """Encapsulates information about the application that is necessary for
+    submitting error reports.
     """
-    def __init__(self, **application_metadata):
-        self.application_metadata = application_metadata
-        self.system_metadata = self._get_system_metadata()
-    
-    def create(self, exc=None, **kwargs):
-        """Create a new :class:`Error` from an exception.
+    default_config_file='.tattleapp'
 
-        Args:
-            exc: The exception, or None to generate the error parameters from
-                the current application state.
-            kwargs: Additional arguments to pass to the :class:`Error`
-                constructor. These will override any derived values.
-        """
-        pass
-    
-    def _get_system_metadata(self):
-        """Get the system metadata to add to the error.
-        """
-        pass
+class User(Config):
+    """Information about the user, including any necessary credentials.
+    """
+    default_config_file = '.tattleuser'
 
-class Error(object):
+class Error(Serializable):
     """Contains all relevant information about an error to be reported.
 
     Args:
@@ -197,23 +202,51 @@ class Error(object):
         exc_message: The exception message.
         traceback: The python stacktrace.
     """
+    
+    fingerprint_fields = (
+        'pacakge_name', 'module_name', 'method_name', 'exc_type', 'exc_message')
+    
     def __init__(
             self, application_metadata, system_metadata, lineno, package_name, 
             module_name, exc_type, exc_value, exc_message, traceback, 
             timestamp):
         pass
     
-    def as_dict(self, paranoid=False):
-        """Convert this error to a simple dict for serialization.
+    def as_fingerprint(self):
+        """Convert this error to a hash based on invariant information. Used
+        for matching against already reported errors.
+        """
+        sha = hashlib.sha256()
+        for field in self.fingerprint_fields):
+            sha.update(str(getattr(self, field)).encode())
+        return sha.hexdigest()
 
+class ErrorFactory(Serializable):
+    """Stores application metadata that should be sent with every error, and
+    creates new :class:`Error` instances from exceptions.
+    """
+    def __init__(self, error_class=Error, **application_metadata):
+        self.error_class = error_class
+        self.application_metadata = application_metadata
+        self.system_metadata = self._get_system_metadata()
+    
+    def create(self, exc=None, **kwargs):
+        """Create a new :class:`Error` from an exception.
+        
         Args:
-            paranoid: Whether to exclude any personally identifiable 
-                information. Note: sensitive information such as
-                passwords will NEVER be included.
+            exc: The exception, or None to generate the error parameters from
+                the current application state.
+            kwargs: Additional arguments to pass to the :class:`Error`
+                constructor. These will override any derived values.
+        """
+        pass
+    
+    def _get_system_metadata(self):
+        """Get the system metadata to add to the error.
         """
         pass
 
-class Report(object):
+class Report(Serializable):
     """Encapsulates an error report.
     """
     def __init__(self, user, error):
@@ -232,16 +265,6 @@ class Report(object):
         return sent
     
     def as_dict(self, paranoid=False):
-        """Convert this report to a simple dict for serialization.
-
-        Args:
-            paranoid: Whether to exclude any personally identifiable 
-                information. Note: sensitive information such as
-                passwords will NEVER be included.
-        
-        Returns:
-            A dict with three keys: user, error, and results.
-        """
         return dict(
             user=self.user.as_dict(paranoid),
             error=self.error.as_dict(paranoid),
