@@ -2,6 +2,9 @@ from github3 import GitHub, login
 from getpass import getuser
 from . import Reporter
 
+# https://gist.github.com/JeffPaine/3145490
+# https://github3py.readthedocs.io
+
 class GithubReporter(Reporter):
     required = dict(
         password = (True, str))
