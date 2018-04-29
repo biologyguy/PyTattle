@@ -8,6 +8,10 @@ import io
 import logging
 import os
 
+# Alternative config parsers
+# https://www.red-dove.com/config-doc/
+
+
 class TattleError(Exception):
     """Base exception class for PyTattle.
     """
